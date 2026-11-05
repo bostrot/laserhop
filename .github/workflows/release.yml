@@ -1,0 +1,37 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: arm-unknown-linux-musleabihf,armv7-unknown-linux-musleabihf,aarch64-unknown-linux-musl,x86_64-unknown-linux-musl
+      - uses: mlugg/setup-zig@v2
+      - run: cargo install cargo-zigbuild --locked
+      - run: cargo test
+      - name: Build
+        run: |
+          mkdir dist
+          for pair in armv6:arm-unknown-linux-musleabihf armv7:armv7-unknown-linux-musleabihf aarch64:aarch64-unknown-linux-musl x86_64:x86_64-unknown-linux-musl; do
+            name="${pair%%:*}"
+            target="${pair#*:}"
+            cargo zigbuild --release --target "$target"
+            cp "target/$target/release/laserhop" "dist/laserhop-$name-linux"
+          done
+          cp install.sh dist/
+          (cd dist && sha256sum * > SHA256SUMS)
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: dist/*
+          generate_release_notes: true
