@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>laserhop</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --card: #fff; --text: #1d1d1b; --muted: #6b6b66; --line: #e2e2dc;
+    --ok: #1f8a4c; --warn: #b26a00; --bad: #c0392b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615; --card: #20201e; --text: #ececea; --muted: #9a9a94; --line: #33332f;
+      --ok: #3fbf74; --warn: #e0a030; --bad: #e5675a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  h1 { font-size: 20px; margin: 0; }
+  header span { color: var(--muted); }
+  .grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
+  @media (min-width: 760px) { .grid { grid-template-columns: 1fr 1.4fr; } }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; min-width: 0; }
+  h2 { font-size: 15px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; }
+  dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
+  code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .preview { margin-top: 12px; background: #000; border-radius: 6px; aspect-ratio: 4 / 3;
+    display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .preview img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .preview p { color: #aaa; margin: 0; }
+  .row { display: flex; gap: 12px; align-items: center; margin-top: 10px; color: var(--muted); flex-wrap: wrap; }
+  label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  .err { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <header><h1>laserhop</h1><span id="host"></span></header>
+  <div class="grid">
+    <section>
+      <h2><span class="dot" id="laser-dot"></span>Laser</h2>
+      <dl id="laser"></dl>
+    </section>
+    <section>
+      <h2><span class="dot" id="camera-dot"></span>Camera</h2>
+      <dl id="camera"></dl>
+      <div class="preview" id="preview"><p>No camera</p></div>
+      <div class="row">
+        <label><input type="checkbox" id="live"> Live (uses more Wi-Fi)</label>
+      </div>
+    </section>
+  </div>
+</main>
+<script>
+  const host = location.hostname.includes(":") ? `[${location.hostname}]` : location.hostname;
+  const base = `${location.protocol}//${location.host}`;
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+  function rows(el, pairs) {
+    el.innerHTML = pairs
+      .filter(([, v]) => v !== null && v !== undefined && v !== "")
+      .map(([k, v, cls]) => `<dt>${k}</dt><dd${cls ? ` class="${cls}"` : ""}>${v}</dd>`)
+      .join("");
+  }
+
+  let cameraUp = false;
+  let snapTimer = null;
+
+  function showPreview() {
+    const box = $("preview");
+    if (!cameraUp) { box.innerHTML = "<p>No camera</p>"; return; }
+    const live = $("live").checked;
+    let img = box.querySelector("img");
+    if (!img) { img = document.createElement("img"); img.alt = "Camera"; box.replaceChildren(img); }
+    clearInterval(snapTimer);
+    if (live) {
+      img.src = `${base}/stream`;
+    } else {
+      const load = () => { img.src = `${base}/snapshot?t=${Date.now()}`; };
+      load();
+      snapTimer = setInterval(load, 2000);
+    }
+  }
+
+  $("live").addEventListener("change", showPreview);
+
+  async function refresh() {
+    let s;
+    try {
+      s = await (await fetch(`${base}/api/status`, { cache: "no-store" })).json();
+    } catch {
+      $("laser-dot").className = "dot bad";
+      $("camera-dot").className = "dot bad";
+      return;
+    }
+    $("host").textContent = `${s.hostname} · v${s.version}`;
+
+    const l = s.laser;
+    $("laser-dot").className = "dot " + (!l.enabled ? "" : !l.connected ? "bad" : l.state === "Alarm" ? "warn" : "ok");
+    rows($("laser"), l.enabled ? [
+      ["Status", l.connected ? esc(l.state || "Connected") : "Not connected (switched off or unplugged?)"],
+      ["Device", l.name && esc(l.name)],
+      ["Firmware", l.firmware && esc(l.firmware)],
+      ["Position", l.position && `<code>${esc(l.position)}</code>`],
+      ["Client", l.client ? esc(l.client) : "none"],
+      ["Rayforge", `GRBL (Telnet), host <code>${esc(host)}</code>, port <code>${l.port}</code>`],
+      ["Last error", l.last_error && esc(l.last_error), "err"],
+    ] : [["Status", "Not set up"]]);
+
+    const c = s.camera;
+    $("camera-dot").className = "dot " + (!c.enabled ? "" : c.connected ? "ok" : "bad");
+    rows($("camera"), c.enabled ? [
+      ["Status", c.connected ? `${c.width}×${c.height}, ${c.fps.toFixed(1)} fps` : "Not connected"],
+      ["Device", c.name && esc(c.name)],
+      ["Viewers", c.connected ? c.viewers : null],
+      ["Stream", `<code>${esc(base)}/stream</code>`],
+      ["Snapshot", `<code>${esc(base)}/snapshot</code>`],
+      ["Last error", !c.connected && c.last_error && esc(c.last_error), "err"],
+    ] : [["Status", "Not set up"]]);
+
+    if (c.connected !== cameraUp) { cameraUp = c.connected; showPreview(); }
+  }
+
+  refresh();
+  setInterval(refresh, 2000);
+</script>
+</body>
+</html>
